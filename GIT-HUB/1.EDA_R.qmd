@@ -1,0 +1,626 @@
+---
+title: "Proyecto_1"
+format: html
+---
+```{r}
+library(reticulate)
+```
+
+```{python}
+import h5py
+import numpy as np
+
+# Ruta del archivo
+train_path = "train.h5"
+test_path = "test.h5"
+
+# Cargar datos de entrenamiento
+with h5py.File(train_path, 'r') as train_file:
+    # Cargar las señales del cuerpo y las etiquetas
+    body_acc_x = train_file['body_acc_x'][:]
+    body_acc_y = train_file['body_acc_y'][:]
+    body_acc_z = train_file['body_acc_z'][:]
+
+    body_gyro_x = train_file['body_gyro_x'][:]
+    body_gyro_y = train_file['body_gyro_y'][:]
+    body_gyro_z = train_file['body_gyro_z'][:]
+
+    total_acc_x = train_file['total_acc_x'][:]
+    total_acc_y = train_file['total_acc_y'][:]
+    total_acc_z = train_file['total_acc_z'][:]
+
+    train_labels = train_file['y'][:]  # Etiquetas
+
+print(f"Datos de entrenamiento cargados:")
+print(f"body_acc_x: {body_acc_x.shape}, body_acc_y: {body_acc_y.shape}, body_acc_z: {body_acc_z.shape}")
+print(f"body_gyro_x: {body_gyro_x.shape}, body_gyro_y: {body_gyro_y.shape}, body_gyro_z: {body_gyro_z.shape}")
+print(f"total_acc_x: {total_acc_x.shape}, total_acc_y: {total_acc_y.shape}, total_acc_z: {total_acc_z.shape}")
+print(f"Etiquetas: {train_labels.shape}")
+
+# Cargar datos de prueba
+with h5py.File(test_path, 'r') as test_file:
+    # Cargar las señales del cuerpo
+    body_acc_x_test = test_file['body_acc_x'][:]
+    body_acc_y_test = test_file['body_acc_y'][:]
+    body_acc_z_test = test_file['body_acc_z'][:]
+
+    body_gyro_x_test = test_file['body_gyro_x'][:]
+    body_gyro_y_test = test_file['body_gyro_y'][:]
+    body_gyro_z_test = test_file['body_gyro_z'][:]
+
+    total_acc_x_test = test_file['total_acc_x'][:]
+    total_acc_y_test = test_file['total_acc_y'][:]
+    total_acc_z_test = test_file['total_acc_z'][:]
+
+print(f"Datos de prueba cargados:")
+print(f"body_acc_x: {body_acc_x_test.shape}, body_acc_y: {body_acc_y_test.shape}, body_acc_z: {body_acc_z_test.shape}")
+print(f"body_gyro_x: {body_gyro_x_test.shape}, body_gyro_y: {body_gyro_y_test.shape}, body_gyro_z: {body_gyro_z_test.shape}")
+print(f"total_acc_x: {total_acc_x_test.shape}, total_acc_y: {total_acc_y_test.shape}, total_acc_z: {total_acc_z_test.shape}")
+```
+```{python}
+from tsfresh import extract_features
+import pandas as pd
+import numpy as np
+import multiprocessing
+
+# Lista de sensores a procesar
+sensors = {
+    'body_acc_x': body_acc_x,
+    'body_acc_y': body_acc_y,
+    'body_acc_z': body_acc_z,
+    'body_gyro_x': body_gyro_x,
+    'body_gyro_y': body_gyro_y,
+    'body_gyro_z': body_gyro_z,
+    'total_acc_x': total_acc_x,
+    'total_acc_y': total_acc_y,
+    'total_acc_z': total_acc_z,
+}
+
+# Paso 1: Convertir cada sensor a formato longitudinal y combinar
+all_signals = []
+for signal_name, signal_data in sensors.items():
+    signal_df = pd.DataFrame(signal_data)  # Convertir la señal en DataFrame
+    signal_df['id'] = signal_df.index  # Agregar ID único para cada ventana
+    signal_long = signal_df.melt(
+        id_vars=['id'], 
+        var_name='time', 
+        value_name='value'
+    )  # Convertir a formato longitudinal
+    signal_long['signal'] = signal_name  # Agregar identificador del sensor
+    all_signals.append(signal_long)
+
+# Combinar todas las señales en un solo DataFrame longitudinal
+combined_signals_long = pd.concat(all_signals)
+
+# Paso 2: Detectar número de procesos disponibles
+num_processes = multiprocessing.cpu_count()
+print(f"Usando {num_processes} procesos para paralelizar.")
+
+# Paso 3: Extraer características con tsfresh
+features_combined = extract_features(
+    combined_signals_long,
+    column_id='id',  # Cada ventana tiene un ID único
+    column_sort='time',  # Orden temporal
+    column_kind='signal',  # Diferenciar las señales
+    column_value='value',  # Los valores de las señales
+    n_jobs=num_processes  # Usar todos los núcleos disponibles
+)
+
+# Paso 4: Mostrar las primeras filas de las características generadas
+print("Características generadas:")
+print(features_combined.head())
+```
+
+```{python}
+print(features_combined.head())
+```
+
+
+
+```{python}
+# Guardar las características en un archivo CSV
+features_combined.to_csv("features_sensores_combined.csv", index=True)
+
+print("Características exportadas a 'features_combined.csv'")
+
+```
+
+```{python}
+# Asegúrate de que las etiquetas están en el DataFrame
+features_combined['label'] = train_labels  # Agregar etiquetas al DataFrame
+# Agrupar por la etiqueta y calcular la media para cada característica
+grouped_features = features_combined.groupby('label').mean()
+# Mostrar las primeras filas del resultado agrupado
+print(grouped_features.head())
+```
+```{python}
+from sklearn.feature_selection import RFE
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+import pandas as pd
+
+# Cargar el dataset exportado
+features_combined = pd.read_csv("features_combined.csv", index_col=0)
+
+# Separar las características (X) y la variable objetivo (y)
+X = features_combined.drop(columns=['label'])  # Todas las características
+y = features_combined['label']  # Variable objetivo multiclase
+
+# Dividir el dataset para acelerar el entrenamiento de RFE
+X_train, _, y_train, _ = train_test_split(X, y, test_size=0.7, random_state=42)
+
+# Crear el modelo base de regresión logística con paralelismo
+model = LogisticRegression(
+    multi_class='multinomial',
+    max_iter=1000,
+    solver='saga',  # Optimizado para datos grandes
+    n_jobs=-1,      # Usa todos los núcleos de tu CPU
+    random_state=42
+)
+
+# Aplicar RFE con 50 características finales
+rfe = RFE(estimator=model, n_features_to_select=50, step=250)  # Ajusta step para más rapidez
+rfe.fit(X_train, y_train)
+
+# Obtener las columnas seleccionadas
+selected_columns = X.columns[rfe.support_]
+print(f"Características seleccionadas ({len(selected_columns)}):")
+print(selected_columns)
+
+# Crear un nuevo DataFrame con las características seleccionadas
+selected_features = X[selected_columns]
+selected_features['label'] = y  # Añadir la variable objetivo al nuevo dataset
+
+# Exportar el nuevo dataset con las características seleccionadas
+selected_features.to_csv("selected_features_rfe.csv", index=False)
+print("Características seleccionadas exportadas a 'selected_features_rfe.csv'.")
+```
+
+# Data Kaggle
+
+```{python}
+from tsfresh import extract_features
+import pandas as pd
+import numpy as np
+import multiprocessing
+
+# Lista de sensores a procesar
+sensors = {
+    'body_acc_x': body_acc_x_test,
+    'body_acc_y': body_acc_y_test,
+    'body_acc_z': body_acc_z_test,
+    'body_gyro_x': body_gyro_x_test,
+    'body_gyro_y': body_gyro_y_test,
+    'body_gyro_z': body_gyro_z_test,
+    'total_acc_x': total_acc_x_test,
+    'total_acc_y': total_acc_y_test,
+    'total_acc_z': total_acc_z_test,
+}
+
+# Paso 1: Convertir cada sensor a formato longitudinal y combinar
+all_signals = []
+for signal_name, signal_data in sensors.items():
+    signal_df = pd.DataFrame(signal_data)  # Convertir la señal en DataFrame
+    signal_df['id'] = signal_df.index  # Agregar ID único para cada ventana
+    signal_long = signal_df.melt(
+        id_vars=['id'], 
+        var_name='time', 
+        value_name='value'
+    )  # Convertir a formato longitudinal
+    signal_long['signal'] = signal_name  # Agregar identificador del sensor
+    all_signals.append(signal_long)
+
+# Combinar todas las señales en un solo DataFrame longitudinal
+combined_signals_long = pd.concat(all_signals)
+
+# Paso 2: Detectar número de procesos disponibles
+num_processes = multiprocessing.cpu_count()
+print(f"Usando {num_processes} procesos para paralelizar.")
+
+# Paso 3: Extraer características con tsfresh
+features_combined_test = extract_features(
+    combined_signals_long,
+    column_id='id',  # Cada ventana tiene un ID único
+    column_sort='time',  # Orden temporal
+    column_kind='signal',  # Diferenciar las señales
+    column_value='value',  # Los valores de las señales
+    n_jobs=num_processes  # Usar todos los núcleos disponibles
+)
+
+# Paso 4: Mostrar las primeras filas de las características generadas
+print("Características generadas:")
+print(features_combined_test.head())
+features_combined_test.to_csv("selected_features_rfe_test.csv", index=False)
+```
+```{python}
+import h5py
+import pandas as pd
+
+# Ruta del archivo HDF5
+train_path = "train.h5"  # Reemplaza con la ruta correcta
+
+# Leer los datos del archivo HDF5
+with h5py.File(train_path, 'r') as train_file:
+    # Cargar las señales del cuerpo
+    body_acc_x = train_file['body_acc_x'][:]
+    body_acc_y = train_file['body_acc_y'][:]
+    body_acc_z = train_file['body_acc_z'][:]
+    
+    body_gyro_x = train_file['body_gyro_x'][:]
+    body_gyro_y = train_file['body_gyro_y'][:]
+    body_gyro_z = train_file['body_gyro_z'][:]
+    
+    # Cargar las señales totales
+    total_acc_x = train_file['total_acc_x'][:]
+    total_acc_y = train_file['total_acc_y'][:]
+    total_acc_z = train_file['total_acc_z'][:]
+    
+    # Cargar las etiquetas
+    train_labels = train_file['y'][:]
+
+# Verificar las formas (dimensiones)
+print("Dimensiones originales:")
+print("body_acc_x:", body_acc_x.shape)
+print("train_labels:", train_labels.shape)
+
+# Crear un DataFrame combinando las señales aplanadas y las etiquetas
+def expand_signals(signal, prefix):
+    """Convierte una señal en columnas individuales con prefijos."""
+    df = pd.DataFrame(signal)
+    df.columns = [f"{prefix}_{i}" for i in range(df.shape[1])]
+    return df
+
+# Expandir todas las señales y asignar nombres
+df_body_acc_x = expand_signals(body_acc_x, "body_acc_x")
+df_body_acc_y = expand_signals(body_acc_y, "body_acc_y")
+df_body_acc_z = expand_signals(body_acc_z, "body_acc_z")
+
+df_body_gyro_x = expand_signals(body_gyro_x, "body_gyro_x")
+df_body_gyro_y = expand_signals(body_gyro_y, "body_gyro_y")
+df_body_gyro_z = expand_signals(body_gyro_z, "body_gyro_z")
+
+df_total_acc_x = expand_signals(total_acc_x, "total_acc_x")
+df_total_acc_y = expand_signals(total_acc_y, "total_acc_y")
+df_total_acc_z = expand_signals(total_acc_z, "total_acc_z")
+
+# Concatenar todas las señales en un único DataFrame
+expanded_data = pd.concat(
+    [
+        df_body_acc_x,
+        df_body_acc_y,
+        df_body_acc_z,
+        df_body_gyro_x,
+        df_body_gyro_y,
+        df_body_gyro_z,
+        df_total_acc_x,
+        df_total_acc_y,
+        df_total_acc_z,
+    ],
+    axis=1,
+)
+
+# Agregar la columna de etiquetas
+expanded_data["label"] = train_labels.flatten()
+
+# Exportar el DataFrame a un archivo CSV
+csv_path = "dataset_entrenamiento_expanded.csv"
+expanded_data.to_csv(csv_path, index=False)
+print(f"Archivo exportado a: {csv_path}")
+
+
+```
+
+
+```{r}
+# Instalar y cargar librerías necesarias
+if (!require("tidyverse")) install.packages("tidyverse")
+library(tidyverse)
+
+# Leer el archivo CSV
+dataset <- read.csv("dataset_entrenamiento_expanded.csv")
+# Calcular la magnitud del giroscopio
+dataset <- dataset %>%
+  mutate(
+    magnitude_gyro = sqrt(gyro_x^2 + gyro_y^2 + gyro_z^2)
+  )
+ggplot(dataset, aes(x = activity, y = magnitude_gyro, fill = activity)) +
+  geom_boxplot() +
+  labs(title = "Magnitud del Giroscopio por Actividad", x = "Actividad", y = "Magnitud") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10), # Girar etiquetas y ajustar tamaño
+    legend.position = "bottom"                                   # Mover la leyenda abajo
+  )
+
+```
+```{r}
+
+colnames(dataset)
+
+```
+```{r}
+# Cargar librerías necesarias
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("showtext")) install.packages("showtext")
+library(tidyverse)
+library(showtext)
+
+# Habilitar fuentes personalizadas
+showtext_auto()
+
+# Agregar la fuente "Times New Roman"
+font_add("Times New Roman", "C:/Windows/Fonts/times.ttf") # Ajusta el path si es necesario
+theme_set(theme_minimal(base_family = "Times New Roman"))
+
+# Leer el archivo CSV
+dataset <- read.csv("dataset_entrenamiento_expanded.csv")
+
+# Obtener columnas relacionadas con aceleración y giroscopio (por eje)
+body_acc_x_cols <- dataset %>% select(starts_with("body_acc_x"))
+body_acc_y_cols <- dataset %>% select(starts_with("body_acc_y"))
+body_acc_z_cols <- dataset %>% select(starts_with("body_acc_z"))
+
+body_gyro_x_cols <- dataset %>% select(starts_with("body_gyro_x"))
+body_gyro_y_cols <- dataset %>% select(starts_with("body_gyro_y"))
+body_gyro_z_cols <- dataset %>% select(starts_with("body_gyro_z"))
+
+# Calcular la magnitud para cada tipo de señal
+dataset <- dataset %>%
+  mutate(
+    magnitude_body_acc = sqrt(rowSums(body_acc_x_cols^2 + body_acc_y_cols^2 + body_acc_z_cols^2)),
+    magnitude_body_gyro = sqrt(rowSums(body_gyro_x_cols^2 + body_gyro_y_cols^2 + body_gyro_z_cols^2))
+  )
+
+# Convertir etiquetas numéricas a actividades descriptivas
+dataset <- dataset %>%
+  mutate(
+    activity = factor(label, levels = 1:6, 
+                      labels = c("WALKING", "WALKING_UPSTAIRS", "WALKING_DOWNSTAIRS", "SITTING", "STANDING", "LAYING"))
+  )
+
+# Gráfico 1: Magnitud del acelerómetro por actividad
+ggplot(dataset, aes(x = activity, y = magnitude_body_acc, fill = activity)) +
+  geom_boxplot(outlier.size = 1, alpha = 0.8) +
+  labs(
+    title = "Accelerometer Magnitude by Activity",
+    x = "Activity",
+    y = "Magnitude"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.title = element_text(size = 14),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "Times New Roman")
+  ) +
+  scale_fill_brewer(palette = "Set2")
+
+# Gráfico 2: Magnitud del giroscopio por actividad
+ggplot(dataset, aes(x = activity, y = magnitude_body_gyro, fill = activity)) +
+  geom_boxplot(outlier.size = 1, alpha = 0.8) +
+  labs(
+    title = "Gyroscope Magnitude by Activity",
+    x = "Activity",
+    y = "Magnitude"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    axis.title = element_text(size = 14),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "Times New Roman")
+  ) +
+  scale_fill_brewer(palette = "Set2")
+
+```
+```{r}
+# Load required libraries
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("showtext")) install.packages("showtext")
+library(tidyverse)
+library(showtext)
+
+# Enable custom fonts
+showtext_auto()
+
+# Add a default system font like "Times New Roman"
+font_add("Times New Roman", "C:/Windows/Fonts/times.ttf") # Path may vary in other OS
+theme_set(theme_minimal(base_family = "Times New Roman"))
+
+# Bar plot showing the number of samples per activity
+ggplot(dataset, aes(x = activity, fill = activity)) +
+  geom_bar(width = 0.6) +
+  labs(
+    title = "Sample Distribution by Activity",
+    x = "Activity",
+    y = "Number of Samples"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "Times New Roman") # Use LaTeX-like font
+  ) +
+  scale_fill_brewer(palette = "Set2")
+
+
+```
+```{r}
+# Load required libraries
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("showtext")) install.packages("showtext")
+library(tidyverse)
+library(showtext)
+
+# Enable custom fonts
+showtext_auto()
+
+# Add a default system font like "Times New Roman"
+font_add("Times New Roman", "C:/Windows/Fonts/times.ttf") # Adjust path if needed
+theme_set(theme_minimal(base_family = "Times New Roman"))
+
+# Scatter plot showing the relationship between accelerometer and gyroscope magnitudes
+ggplot(dataset, aes(x = magnitude_body_acc, y = magnitude_body_gyro, color = activity)) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(
+    title = "Relationship Between Accelerometer and Gyroscope Magnitudes",
+    x = "Accelerometer Magnitude",
+    y = "Gyroscope Magnitude"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "Times New Roman")
+  ) +
+  scale_color_brewer(palette = "Set2") # Use a clean and professional color palette
+
+```
+```{r}
+# Load required libraries
+if (!require("tidyverse")) install.packages("tidyverse")
+if (!require("showtext")) install.packages("showtext")
+library(tidyverse)
+library(showtext)
+
+# Enable custom fonts
+showtext_auto()
+
+# Add a default system font like "Times New Roman"
+font_add("Times New Roman", "C:/Windows/Fonts/times.ttf") # Adjust path if needed
+theme_set(theme_minimal(base_family = "Times New Roman"))
+
+# Select a specific row (window) to plot the signals in X, Y, and Z
+# Ensure the columns match the pattern
+window_data <- dataset[1, grepl("body_acc_x|body_acc_y|body_acc_z", names(dataset))]
+
+# Verify if columns were selected correctly
+if (ncol(window_data) == 0) {
+  stop("No columns matching the pattern 'body_acc_x|body_acc_y|body_acc_z' were found.")
+}
+
+# Transpose for easier manipulation
+window_data <- as.data.frame(t(window_data))
+
+# Add a time column (index for each sample)
+window_data$time <- seq(1, nrow(window_data))
+
+# Rename the value column
+colnames(window_data)[1] <- "value"
+
+# Add axis identifier for each row
+# Assuming there are 128 values for each axis (X, Y, Z)
+window_data$axis <- rep(c("X", "Y", "Z"), each = 128)
+
+# Plot the temporal variation of the signals
+ggplot(window_data, aes(x = time, y = value, color = axis)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Temporal Variation of the Signal (Window 1)",
+    x = "Time",
+    y = "Signal Value",
+    color = "Axis"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10),
+    panel.grid.major = element_line(color = "gray85"),
+    panel.grid.minor = element_blank(),
+    text = element_text(family = "Times New Roman")
+  ) +
+  scale_color_brewer(palette = "Set1") # Use a clean and professional color palette
+  
+```
+```{r}
+library(ggplot2)
+library(RColorBrewer)
+
+# Gráfico 1: Distribución de magnitud del acelerómetro por actividad
+ggplot(dataset, aes(x = magnitude_body_acc, fill = activity, color = activity)) +
+  geom_density(alpha = 0.4, size = 0.8) +  # Bordes y transparencia
+  labs(
+    title = "Distribution of Accelerometer Magnitude by Activity",
+    x = "Accelerometer Magnitude",
+    y = "Density",
+    fill = "Activity",
+    color = "Activity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    plot.title = element_text(hjust = 0.5, face = "bold"),  # Centrar título
+    legend.position = "bottom",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  ) +
+  scale_fill_brewer(palette = "Dark2") +  # Colores más claros y profesionales
+  scale_color_brewer(palette = "Dark2") +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+
+# Gráfico 2: Distribución de magnitud del giroscopio por actividad
+ggplot(dataset, aes(x = magnitude_body_gyro, fill = activity, color = activity)) +
+  geom_density(alpha = 0.4, size = 0.8) +  # Bordes y transparencia
+  labs(
+    title = "Distribution of Gyroscope Magnitude by Activity",
+    x = "Gyroscope Magnitude",
+    y = "Density",
+    fill = "Activity",
+    color = "Activity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    plot.title = element_text(hjust = 0.5, face = "bold"),  # Centrar título
+    legend.position = "bottom",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  ) +
+  scale_fill_brewer(palette = "Dark2") +  # Colores consistentes
+  scale_color_brewer(palette = "Dark2") +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+
+
+```
+
+```{r}
+# Seleccionar columnas relacionadas con las señales
+signal_cols <- dataset %>%
+  select(matches("body_acc|body_gyro|total_acc"))
+
+# Realizar PCA
+pca <- prcomp(signal_cols, scale. = TRUE)
+pca_data <- as.data.frame(pca$x[, 1:2]) # Tomar las dos primeras componentes principales
+pca_data$activity <- dataset$activity
+
+# Gráfico de PCA
+ggplot(pca_data, aes(x = PC1, y = PC2, color = activity)) +
+  geom_point(alpha = 0.6, size = 2) +
+  labs(
+    title = "PCA Projection of Signal Data",
+    x = "Principal Component 1",
+    y = "Principal Component 2",
+    color = "Activity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    legend.position = "bottom"
+  ) +
+  scale_color_brewer(palette = "Set2")
+
+```
+
